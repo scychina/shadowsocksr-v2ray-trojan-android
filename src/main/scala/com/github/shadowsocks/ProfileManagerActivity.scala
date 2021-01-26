@@ -18,6 +18,7 @@ import android.support.v7.widget.Toolbar.OnMenuItemClickListener
 import android.support.v7.widget._
 import android.support.v7.widget.helper.ItemTouchHelper
 import android.support.v7.widget.helper.ItemTouchHelper.SimpleCallback
+import android.support.v7.view.ActionMode
 import android.text.style.TextAppearanceSpan
 import android.text.{SpannableStringBuilder, Spanned, TextUtils}
 import android.view._
@@ -37,6 +38,7 @@ import net.glxn.qrgen.android.QRCode
 import java.lang.System.currentTimeMillis
 import java.lang.Thread
 import java.text.SimpleDateFormat
+import java.util
 
 import android.util.{Base64, Log}
 import android.content.DialogInterface._
@@ -52,6 +54,7 @@ import tun2socks.Tun2socks
 import scala.language.implicitConversions
 import Profile._
 import android.support.v4.app.NotificationCompat
+import com.github.shadowsocks.database.SSRSub.decodeBase64
 import com.github.shadowsocks.database.VmessAction.profile
 import com.github.shadowsocks.services.{BgResultReceiver, GetResultCallBack, LatencyTestService}
 
@@ -60,6 +63,7 @@ import scala.concurrent.duration.{Duration, SECONDS}
 import scala.concurrent.{Await, Future}
 import scala.collection.immutable.HashMap
 
+// support group on switch
 object ProfileManagerActivity {
   // profiles count
   def getProfilesByGroup (groupName: String, is_sort: Boolean): List[Profile] = {
@@ -87,15 +91,25 @@ final class ProfileManagerActivity extends AppCompatActivity with OnMenuItemClic
     with View.OnClickListener with View.OnKeyListener {
 
     var item: Profile = _
-    var hideServer = false
+    var displayInfo = List(true, false, true)
 //    private val text = itemView.findViewById(android.R.id.text1).asInstanceOf[CheckedTextView]
     // profile name
     private val text1 = itemView.findViewById(android.R.id.text1).asInstanceOf[TextView]
     private val text2 = itemView.findViewById(android.R.id.text2).asInstanceOf[TextView]
-    // trafic
+    // traffic
     private val tvTraffic = itemView.findViewById(R.id.traffic).asInstanceOf[TextView]
+    private val selectedBtn = itemView.findViewById(R.id.selected).asInstanceOf[ImageView]
     itemView.setOnClickListener(this)
     itemView.setOnKeyListener(this)
+    itemView.setOnLongClickListener(view => {
+      if (!multiSelect) {
+        if (actionMode.isEmpty) {
+          actionMode = Some(view.getContext.asInstanceOf[AppCompatActivity].startSupportActionMode(actionModeCallbacks))
+        }
+        this.updateProfileBackground()
+      }
+      true
+    })
 
     {
       val shareBtn = itemView.findViewById(R.id.share).asInstanceOf[ImageView]
@@ -143,13 +157,13 @@ final class ProfileManagerActivity extends AppCompatActivity with OnMenuItemClic
       val pingBtn = itemView.findViewById(R.id.ping_single).asInstanceOf[ImageView]
       pingBtn.setOnClickListener(_ => {
 
-        getWindow.addFlags(WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON)
+//        getWindow.addFlags(WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON)
         val singleTestProgressDialog = ProgressDialog.show(ProfileManagerActivity.this, getString(R.string.tips_testing), getString(R.string.tips_testing), false, true)
         item.pingItem(app.settings.getString(Key.PING_METHOD, "google")).foreach(result => {
             item.elapsed = result.data
             app.profileManager.updateProfile(item)
             this.updateText(0, 0, result.data)
-            runOnUiThread(() => getWindow.clearFlags(WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON))
+//            runOnUiThread(() => getWindow.clearFlags(WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON))
             singleTestProgressDialog.dismiss()
             Snackbar.make(findViewById(android.R.id.content), result.msg, Snackbar.LENGTH_LONG).show
           })
@@ -166,13 +180,19 @@ final class ProfileManagerActivity extends AppCompatActivity with OnMenuItemClic
       val tx = item.tx + txTotal
       val rx = item.rx + rxTotal
       val elapsed = if (elapsedInput != -1) elapsedInput else item.elapsed
-      val trafficStatus = if (tx != 0 || rx != 0 || elapsed != 0 || item.url_group != "") {
+      val trafficStatus = if (displayInfo(2) && (tx != 0 || rx != 0 || elapsed != 0 || item.url_group != "")) {
         getString(R.string.stat_profiles,
           TrafficMonitor.formatTraffic(tx), TrafficMonitor.formatTraffic(rx), String.valueOf(elapsed), "").trim
       } else ""
       handler.post(() => {
         text1.setText(item.name)
-        text2.setText(if (hideServer) item.url_group else item.getAddr() )
+        val info = (displayInfo(0), displayInfo(1)) match {
+          case (true, true) => s"${item.getAddr()}:${item.getPortStr()}"
+          case (true, false) => s"${item.getAddr()}"
+          case (false, true) => s"${item.getPortStr()}"
+          case (false, false)  => ""
+        }
+        text2.setText(info)
         tvTraffic.setText(trafficStatus)
       })
     }
@@ -187,11 +207,31 @@ final class ProfileManagerActivity extends AppCompatActivity with OnMenuItemClic
         itemView.setSelected(false)
         if (selectedItem eq this) selectedItem = null
       }
+      selectedBtn.setVisibility(if (selectedProfileIds.contains(item.id)) View.VISIBLE else View.GONE)
+    }
+
+    def updateProfileBackground (): Unit = {
+      if (selectedProfileIds.contains(item.id)) {
+        selectedProfileIds.remove(item.id)
+        selectedBtn.setVisibility(View.GONE)
+      } else {
+        selectedProfileIds.add(item.id)
+        selectedBtn.setVisibility(View.VISIBLE)
+      }
+      if (selectedProfileIds.isEmpty) {
+        actionMode.foreach(am => am.finish())
+      } else {
+        actionMode.foreach(am => am.setTitle(s"${selectedProfileIds.size}"))
+      }
     }
 
     def onClick(v: View) {
-      app.switchProfile(item.id)
-      finish
+      if (!multiSelect) {
+        app.switchProfile(item.id)
+        finish
+      } else {
+        this.updateProfileBackground()
+      }
     }
 
     def onKey(v: View, keyCode: Int, event: KeyEvent) = if (event.getAction == KeyEvent.ACTION_DOWN) keyCode match {
@@ -209,7 +249,7 @@ final class ProfileManagerActivity extends AppCompatActivity with OnMenuItemClic
   // TODO: update adapter
   private class ProfilesAdapter extends RecyclerView.Adapter[ProfileViewHolder] {
     var profiles = new ArrayBuffer[Profile]
-    var hideServer = false
+    var displayInfo = getDisplayInfo()
     profiles ++= getProfilesByGroup(currentGroupName)
 
     def onGroupChange(groupName: String): Unit = {
@@ -229,18 +269,24 @@ final class ProfileManagerActivity extends AppCompatActivity with OnMenuItemClic
     def getItemCount = profiles.length
 
     def onBindViewHolder(vh: ProfileViewHolder, i: Int) = {
-      vh.hideServer = hideServer
+      vh.displayInfo = displayInfo
       vh.bind(profiles(i))
     }
 
     def onCreateViewHolder(vg: ViewGroup, i: Int) ={
       val layoutId = if (Build.VERSION.SDK_INT >= 21) R.layout.layout_profiles_item1 else R.layout.layout_profiles_item
-      hideServer = app.settings.getBoolean(Key.HIDE_SERVER, false)
+//      displayInfo = getDisplayInfo()
       new ProfileViewHolder(LayoutInflater.from(vg.getContext).inflate(layoutId, vg, false))
     }
 
+    def getDisplayInfo () = {
+      import collection.JavaConverters.mutableSetAsJavaSetConverter
+      val fields = app.settings.getStringSet(Key.SELECT_DISPLAY_INFO, scala.collection.mutable.Set("server", "port", "traffic").asJava)
+      List(fields.contains("server"), fields.contains("port"), fields.contains("traffic"))
+    }
+
     def resetProfiles (): Unit = {
-      profilesAdapter.hideServer = app.settings.getBoolean(Key.HIDE_SERVER, false)
+      profilesAdapter.displayInfo = getDisplayInfo()
       is_sort = app.settings.getString(Key.SORT_METHOD, Key.SORT_METHOD_DEFAULT) == Key.SORT_METHOD_ELAPSED
       profiles.clear()
       profiles ++= getProfilesByGroup(currentGroupName)
@@ -287,6 +333,15 @@ final class ProfileManagerActivity extends AppCompatActivity with OnMenuItemClic
       notifyItemRemoved(pos)
       updateGroupSpinner(Option(currentGroupName))
     }
+
+    def removeById(id: Int): Unit = {
+      val pos = profiles.indexWhere(_.id == id)
+      if (pos > -1) {
+        remove(pos)
+        app.profileManager.delProfile(id)
+      }
+    }
+
     def undo(actions: Iterator[(Int, Profile)]) = for ((index, item) <- actions) {
       profiles.insert(index, item)
       notifyItemInserted(index)
@@ -444,20 +499,69 @@ final class ProfileManagerActivity extends AppCompatActivity with OnMenuItemClic
   private final val REQUEST_SETTINGS = 44
   private final val TAG = "ProfileManagerActivity"
   private var currentGroupName: String = _
+  private var multiSelect = false
+  private val exportedGroupNames = scala.collection.mutable.Set[CharSequence]()
+  private val selectedProfileIds = scala.collection.mutable.HashSet.empty[Int]
+  private var actionMode: Option[ActionMode] = None
+  private val actionModeCallbacks = new ActionMode.Callback {
+    override def onCreateActionMode(mode: ActionMode, menu: Menu): Boolean = {
+      multiSelect = true
+      mode.getMenuInflater.inflate(R.menu.profile_batch_menu, menu)
+      mode.setTitle("1")
+      true
+    }
+    override def onPrepareActionMode(mode: ActionMode, menu: Menu): Boolean = false
+    override def onActionItemClicked(mode: ActionMode, item: MenuItem): Boolean = {
+      item.getItemId match {
+        case R.id.action_delete_profile => {
+          val dialog = new AlertDialog.Builder(ProfileManagerActivity.this, R.style.Theme_Material_Dialog_Alert)
+            .setTitle(getString(R.string.batch_delete))
+            .setPositiveButton(android.R.string.yes, ((_, _) =>{
+              selectedProfileIds.filter(_ != app.profileId).foreach(profilesAdapter.removeById)
+              finish()
+              startActivity(new Intent(getIntent()))
+            }): DialogInterface.OnClickListener)
+            .setNegativeButton(android.R.string.no, null)
+            .setMessage(getString(R.string.batch_delete_selected_msg, currentGroupName))
+            .create()
+          dialog.show()
+          true
+        }
+        case R.id.action_export_profile => {
+          val exportData = profilesAdapter.profiles.filter(p => selectedProfileIds.contains(p.id))
+            .map(_.toString())
+            .mkString("\n")
+          clipboard.setPrimaryClip(ClipData.newPlainText(null, exportData))
+          Toast.makeText(ProfileManagerActivity.this, R.string.action_export_msg, Toast.LENGTH_SHORT).show
+          mode.finish()
+          true
+        }
+        case _ => false
+      }
+    }
+    override def onDestroyActionMode(mode: ActionMode): Unit = {
+      multiSelect = false
+      if (selectedProfileIds.nonEmpty) {
+        selectedProfileIds.clear()
+        profilesAdapter.resetProfiles()
+        profilesAdapter.notifyDataSetChanged()
+      }
+    }
+  }
 
 
   def isPortAvailable (port: Int):Boolean = {
     // Assume no connection is possible.
-    var result = true;
+//    var result = true;
+//
+//    try {
+//      (new Socket("127.0.0.1", port)).close()
+//      result = false;
+//    } catch {
+//      case e: Exception => Unit
+//    }
 
-    try {
-      (new Socket("127.0.0.1", port)).close()
-      result = false;
-    } catch {
-      case e: Exception => Unit
-    }
-
-    return result;
+    return true;
   }
 
   override def onCreate(savedInstanceState: Bundle) {
@@ -503,6 +607,8 @@ final class ProfileManagerActivity extends AppCompatActivity with OnMenuItemClic
     val animator = new DefaultItemAnimator
     animator.setSupportsChangeAnimations(false)
     profilesList.setItemAnimator(animator)
+    profilesList.setHasFixedSize(true)
+    profilesList.setItemViewCacheSize(15)
     profilesList.setAdapter(profilesAdapter)
     layoutManager.scrollToPosition(profilesAdapter.profiles.zipWithIndex.collectFirst {
       case (profile, i) if profile.id == app.profileId => i
@@ -679,6 +785,7 @@ final class ProfileManagerActivity extends AppCompatActivity with OnMenuItemClic
     }
   }
 
+  /*
   def ssrsubDialog() {
     val prefs = PreferenceManager.getDefaultSharedPreferences(this)
 
@@ -889,6 +996,7 @@ final class ProfileManagerActivity extends AppCompatActivity with OnMenuItemClic
       .create()
       .show()
   }
+  */
 
   def updateNfcState() {
     isNfcAvailable = false
@@ -952,21 +1060,19 @@ final class ProfileManagerActivity extends AppCompatActivity with OnMenuItemClic
     if (resultCode != Activity.RESULT_OK) return
     requestCode match {
       case REQUEST_CREATE_DOCUMENT => {
+        if (exportedGroupNames.isEmpty) return
         autoClose({
           val filePath = data.getData
           getContentResolver.openOutputStream(filePath)
         })(out => {
-          val profiles = ProfileManagerActivity.getProfilesByGroup(currentGroupName, false)
+          Log.e(TAG, s"exportedGroupNames: ${exportedGroupNames.mkString(", ")}")
+          val profiles = exportedGroupNames.map(name => app.profileManager.getAllProfilesByGroup(name.toString))
+            .filter(_.nonEmpty).map(_.get).reduce(_ ++ _)
+          Log.e(TAG, s"profiles: ${profiles.size}")
+          //          val profiles = ProfileManagerActivity.getProfilesByGroup(currentGroupName, false)
           val buffer = profiles.mkString("\n").getBytes(Charset.forName("UTF-8"))
           out.write(buffer)
           Toast.makeText(this, R.string.action_export_file_msg, Toast.LENGTH_SHORT).show
-//          app.profileManager.getAllProfiles match {
-//            case Some(profiles) =>
-//              val buffer = profiles.mkString("\n").getBytes(Charset.forName("UTF-8"))
-//              out.write(buffer)
-//              Toast.makeText(this, R.string.action_export_file_msg, Toast.LENGTH_SHORT).show
-//            case _ => Toast.makeText(this, R.string.action_export_file_err, Toast.LENGTH_SHORT).show
-//          }
         })
       }
       case REQUEST_IMPORT_PROFILES => {
@@ -1109,18 +1215,59 @@ final class ProfileManagerActivity extends AppCompatActivity with OnMenuItemClic
       if (clipboard.hasPrimaryClip) {
         val link = clipboard.getPrimaryClip.getItemAt(0).getText
         if (createProfilesFromText(link)) return true
+        // support import from base64
+        if (createProfilesFromText(decodeBase64(link.toString))) return true
       }
       Toast.makeText(this, R.string.action_import_err, Toast.LENGTH_SHORT).show
       true
       // startFilesForResult
     case R.id.action_export_file =>
-      val dateFormat = new SimpleDateFormat("yyyyMMddhhmmss")
-      val date = dateFormat.format(new Date())
-      val intent = new Intent(Intent.ACTION_CREATE_DOCUMENT)
-      intent.addCategory(Intent.CATEGORY_OPENABLE)
-      intent.setType("text/plain")
-      intent.putExtra(Intent.EXTRA_TITLE, s"profiles-$date.txt")
-      startActivityForResult(intent, REQUEST_CREATE_DOCUMENT)
+      val groupNames = app.profileManager.getGroupNames
+        .map(_.toArray.map(s=> s.asInstanceOf[CharSequence]))
+        .getOrElse(Array())
+      if (groupNames.isEmpty) { return true }
+      val checkedItems = groupNames.map(s => if (s == currentGroupName) true else false)
+      exportedGroupNames.add(currentGroupName)
+      val builder = new AlertDialog.Builder(this, R.style.Theme_Material_Dialog_Alert)
+      builder.setMultiChoiceItems(groupNames, checkedItems, new DialogInterface.OnMultiChoiceClickListener(){
+        override def onClick(dialog: DialogInterface, which: Int, isChecked: Boolean): Unit = {
+          isChecked match {
+            case true => exportedGroupNames.add(groupNames(which))
+            case false => exportedGroupNames.remove(groupNames(which))
+          }
+        }
+      })
+      builder.setTitle(R.string.action_export_file)
+      builder.setPositiveButton(android.R.string.yes, ((_, _) =>{
+        if (exportedGroupNames.isEmpty) { return }
+        val dateFormat = new SimpleDateFormat("yyyyMMddhhmmss")
+        val date = dateFormat.format(new Date())
+        val intent = new Intent(Intent.ACTION_CREATE_DOCUMENT)
+        intent.addCategory(Intent.CATEGORY_OPENABLE)
+        intent.setType("text/plain")
+        val fileName = currentGroupName match {
+          case f if f == app.getString(R.string.allgroups) => s"$f-$date.txt"
+          case _ => s"Profiles-$date.txt"
+        }
+        intent.putExtra(Intent.EXTRA_TITLE, fileName)
+        startActivityForResult(intent, REQUEST_CREATE_DOCUMENT)
+      }): DialogInterface.OnClickListener)
+      builder.setNegativeButton(android.R.string.no, null)
+      builder.setNeutralButton(R.string.allgroups, new OnClickListener {
+        override def onClick(dialog: DialogInterface, which: Int): Unit = { }
+      })
+      val dialog = builder.create()
+      dialog.show()
+      dialog.getButton(DialogInterface.BUTTON_NEUTRAL)
+        .setOnClickListener(new View.OnClickListener {
+          override def onClick(v: View): Unit = {
+            val listView = dialog.getListView
+            for (i <- groupNames.indices) {
+              exportedGroupNames.add(groupNames(i))
+              listView.setItemChecked(i, true)
+            }
+          }
+        })
       true
     case R.id.action_import_file =>
       val intent = new Intent(Intent.ACTION_GET_CONTENT)
@@ -1175,12 +1322,12 @@ final class ProfileManagerActivity extends AppCompatActivity with OnMenuItemClic
 
                   isTesting = false
                   testAsyncJob.interrupt()
-                  runOnUiThread(() => getWindow.clearFlags(WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON))
+//                  runOnUiThread(() => getWindow.clearFlags(WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON))
                   finish()
                   startActivity(new Intent(getIntent))
               }
           })
-          getWindow.addFlags(WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON)
+//          getWindow.addFlags(WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON)
 
           val testV2rayProfiles = (v2rayProfiles: List[List[Profile]], size: Int) => {
             val pingMethod = app.settings.getString(Key.PING_METHOD, "google")
@@ -1338,7 +1485,7 @@ final class ProfileManagerActivity extends AppCompatActivity with OnMenuItemClic
                 testProgressDialog = null
               }
 
-              runOnUiThread(() => getWindow.clearFlags(WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON))
+//              runOnUiThread(() => getWindow.clearFlags(WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON))
               finish()
               startActivity(new Intent(Action.SORT))
               Looper.loop()

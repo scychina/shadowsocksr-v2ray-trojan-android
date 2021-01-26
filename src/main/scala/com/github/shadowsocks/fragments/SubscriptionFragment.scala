@@ -35,7 +35,7 @@ import net.glxn.qrgen.android.QRCode
 import scala.collection.mutable.ArrayBuffer
 import scala.util.{Failure, Success, Try}
 
-// TODO: refactor
+// TODO: update progress
 class SubscriptionFragment extends Fragment with OnMenuItemClickListener {
 
   private final val TAG = "SubscriptionFragment"
@@ -93,9 +93,14 @@ class SubscriptionFragment extends Fragment with OnMenuItemClickListener {
       updateAllSubscriptions()
       true
     }
+    case R.id.action_export_subscription => {
+      exportAllSubscriptions()
+      true
+    }
     case _ => false
   }
 
+  // TODO: handle special case like "v2ray"
   private[this] def addSubscription(): Unit = {
     showSubscriptionDialog(None) { (responseString, url, groupName, enableAutoSub) => {
       SSRSub.createSSRSub(responseString, url, groupName) match {
@@ -171,6 +176,11 @@ class SubscriptionFragment extends Fragment with OnMenuItemClickListener {
     }
   }
 
+  private[this] def exportAllSubscriptions (): Unit = {
+    val urls = ssrsubAdapter.profiles.map(ssrSub => ssrSub.url).mkString("\n")
+    clipboard.setPrimaryClip(ClipData.newPlainText(null, urls))
+  }
+
   // TODO: Future.sequence
   private[this] def updateAllSubscriptions (): Unit = {
     Utils.ThrowableFuture {
@@ -178,7 +188,12 @@ class SubscriptionFragment extends Fragment with OnMenuItemClickListener {
         testProgressDialog = ProgressDialog.show(requireContext(), getString(R.string.ssrsub_progres), getString(R.string.ssrsub_progres_text), false, true)
       })
       app.ssrsubManager.getAllSSRSubs match {
-        case Some(ssrsubs) => ssrsubs.foreach(updateSingleSubscription)
+        case Some(ssrsubs) => ssrsubs.zipWithIndex.foreach{case(ssrsub, i) => {
+          configActivity.runOnUiThread(() => {
+            testProgressDialog.setMessage(getString(R.string.ssrsub_update_progres, i: Integer, ssrsubs.size: Integer))
+          })
+          updateSingleSubscription(ssrsub)
+        }}
         case _ => configActivity.runOnUiThread(() => {
           Toast.makeText(requireContext(), R.string.action_export_err, Toast.LENGTH_SHORT).show
         })
@@ -186,6 +201,7 @@ class SubscriptionFragment extends Fragment with OnMenuItemClickListener {
       handler.post(() => {
         testProgressDialog.dismiss
         testProgressDialog = null
+        ssrsubAdapter.reset()
         ssrsubAdapter.notifyDataSetChanged()
       })
 //      finish()
@@ -212,10 +228,10 @@ class SubscriptionFragment extends Fragment with OnMenuItemClickListener {
     ))
   }
 
-  private def showShareDialog (url: String): Unit = {
+  private def showShareDialog (item: SSRSub): Unit = {
     val image = new ImageView(getActivity)
     image.setLayoutParams(new LinearLayout.LayoutParams(-1, -1))
-    val qrcode = QRCode.from(url)
+    val qrcode = QRCode.from(item.url)
       .withSize(Utils.dpToPx(getActivity, 250), Utils.dpToPx(getActivity, 250))
       .asInstanceOf[QRCode].bitmap()
     image.setImageBitmap(qrcode)
@@ -223,11 +239,11 @@ class SubscriptionFragment extends Fragment with OnMenuItemClickListener {
       .setCancelable(true)
       .setPositiveButton(R.string.close, null)
       .setNegativeButton(R.string.copy_url, ((_, _) =>
-        clipboard.setPrimaryClip(ClipData.newPlainText(null, url))): DialogInterface.OnClickListener)
+        clipboard.setPrimaryClip(ClipData.newPlainText(null, item.url))): DialogInterface.OnClickListener)
       .setView(image)
       .setTitle(R.string.share)
       .create()
-    dialog.setMessage(getString(R.string.share_message_without_nfc))
+    dialog.setMessage(item.url_group)
     dialog.show()
   }
 
@@ -356,7 +372,7 @@ class SubscriptionFragment extends Fragment with OnMenuItemClickListener {
           }
           case R.id.subscription_menu_edit => edit_subscription()
           case R.id.subscription_menu_delete => showRemoveDialog(viewHolder.getAdapterPosition, viewHolder.item)
-          case R.id.subscription_menu_share_url => showShareDialog(viewHolder.item.url)
+          case R.id.subscription_menu_share_url => showShareDialog(viewHolder.item)
           case _ =>
         }
         subscriptionMenu.dismiss()
@@ -493,6 +509,11 @@ class SubscriptionFragment extends Fragment with OnMenuItemClickListener {
       val pos = getItemCount
       profiles += item
       notifyItemInserted(pos)
+    }
+
+    def reset(): Unit = {
+      profiles.clear()
+      profiles ++= app.ssrsubManager.getAllSSRSubs.getOrElse(List.empty[SSRSub])
     }
 
     def remove(pos: Int) {

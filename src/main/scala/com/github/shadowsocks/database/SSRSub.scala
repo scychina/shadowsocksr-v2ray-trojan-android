@@ -118,10 +118,11 @@ object SSRSub {
         subscribes = decodeBase64(scala.io.Source.fromInputStream(in).mkString)
       })
     } else {
-      val resp = response.body().string.replaceAll("=", "")
-          .replaceAll("\\+", "-")
-          .replaceAll("/", "_")
-      subscribes = new String(Base64.decode(resp, Base64.URL_SAFE), "UTF-8")
+//      val resp = response.body().string.replaceAll("=", "")
+//          .replaceAll("\\+", "-")
+//          .replaceAll("/", "_")
+//      subscribes = new String(Base64.decode(resp, Base64.URL_SAFE), "UTF-8")
+      subscribes = decodeBase64(response.body().string)
     }
     subscribes
   }
@@ -156,7 +157,7 @@ object SSRSub {
 
     def addProfiles(responseString: String, subUrl: String =""): Unit = {
       var currentProfile = app.currentProfile
-      val delete_profiles = app.profileManager.getAllProfilesBySSRSub(ssrsub) match {
+      val delete_profiles = app.profileManager.getAllProfilesBySSRSub(ssrsub, true) match {
         case Some(subProfiles) =>
           subProfiles.filter(profile=> profile.ssrsub_id <= 0 || profile.ssrsub_id == ssrsub.id)
         case _ => List()

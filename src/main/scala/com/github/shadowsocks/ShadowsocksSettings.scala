@@ -37,7 +37,7 @@ object ShadowsocksSettings {
   private val PROXY_PREFS = Array(Key.group_name, Key.name, Key.host, Key.remotePort, Key.localPort, Key.password, Key.method,
     Key.protocol, Key.obfs, Key.obfs_param, Key.dns, Key.china_dns, Key.protocol_param, Key.v_ps,
     Key.v_id, Key.v_add, Key.v_host, Key.v_port, Key.v_path, Key.v_aid, Key.v_id_json, Key.v_add_json, Key.v_aid_json, Key.v_security_json,
-    Key.v_security, Key.v_tls, Key.v_headertypes, Key.v_net, Key.t_addr, Key.t_sni, Key.t_verify_certificate)
+    Key.v_security, Key.v_tls, Key.v_headertypes, Key.v_net, Key.v_allowInsecure, Key.t_addr, Key.t_sni, Key.t_verify_certificate)
   private val FEATURE_PREFS = Array(Key.route, Key.proxyApps, Key.udpdns, Key.ipv6, Key.tfo)
 
   // Helper functions
@@ -71,10 +71,12 @@ object ShadowsocksSettings {
 //    val isPerAppProxyEnabled = app.appStateManager.getAppState().map(_.per_app_proxy_enable).getOrElse(false)
     if (profile.isVmess) {
       val v_security = if (TextUtils.isEmpty(profile.v_security)) "auto" else profile.v_security
+      val v_allowInsecure = if (profile.t_allowInsecure) "true" else "false"
       name match {
         case Key.group_name => updateSummaryEditTextPreference(pref, profile.url_group)
         case Key.v_ps => updateSummaryEditTextPreference(pref, profile.v_ps)
         case Key.v_port => updateNumberPickerPreference(pref, Option(profile.v_port).getOrElse("0").toInt)
+//        case Key.localPort => updateNumberPickerPreference(pref, profile.localPort)
         case Key.v_aid => updateNumberPickerPreference(pref, Option(profile.v_aid).getOrElse("0").toInt)
         case Key.v_path => updateSummaryEditTextPreference(pref, profile.v_path)
         case Key.v_host => updateSummaryEditTextPreference(pref, profile.v_host)
@@ -88,6 +90,7 @@ object ShadowsocksSettings {
         case Key.dns => updateSummaryEditTextPreference(pref, profile.dns)
         case Key.china_dns => updateSummaryEditTextPreference(pref, profile.china_dns)
         case Key.ipv6 => updateSwitchPreference(pref, profile.ipv6)
+        case Key.v_allowInsecure => updateDropDownPreference(pref, v_allowInsecure)
         case _ =>
       }
       return
@@ -107,6 +110,7 @@ object ShadowsocksSettings {
         case Key.group_name => updateSummaryEditTextPreference(pref, profile.url_group)
         case Key.name => updateSummaryEditTextPreference(pref, profile.name)
         case Key.remotePort => updateNumberPickerPreference(pref, profile.t_port)
+//        case Key.localPort => updateNumberPickerPreference(pref, profile.localPort)
         case Key.password => updatePasswordEditTextPreference(pref, profile.password)
         case Key.t_verify_certificate => updateSwitchPreference(pref, !profile.t_allowInsecure)
         case Key.route => updateDropDownPreference(pref, profile.route)
@@ -174,6 +178,7 @@ class ShadowsocksSettings extends PreferenceFragment with OnSharedPreferenceChan
 
     ssrCategory = Option(ssrCategory).getOrElse(findPreference(getResources.getString(R.string.ssrPreferenceGroup)).asInstanceOf[PreferenceGroup])
     vmessCategory  = Option(vmessCategory).getOrElse(findPreference(getResources.getString(R.string.vmessPreferenceGroup)).asInstanceOf[PreferenceGroup])
+    v2rayJSONCategory  = Option(v2rayJSONCategory).getOrElse(findPreference(getResources.getString(R.string.v2rayJSONPreferenceGroup)).asInstanceOf[PreferenceGroup])
     trojanCategory  = Option(trojanCategory).getOrElse(findPreference(getResources.getString(R.string.trojanPreferenceGroup)).asInstanceOf[PreferenceGroup])
     val categories = List(ssrCategory, vmessCategory, trojanCategory).filter(category => category != null)
     categories.foreach(_.findPreference(Key.group_name).setOnPreferenceChangeListener((_, value) => {
@@ -321,10 +326,22 @@ class ShadowsocksSettings extends PreferenceFragment with OnSharedPreferenceChan
       profile.name = value.asInstanceOf[String]
       app.profileManager.updateProfile(profile)
     })
+    v2rayJSONCategory.findPreference(Key.v_ps).setOnPreferenceChangeListener((_, value) => {
+      profile.v_ps = value.asInstanceOf[String]
+      profile.name = value.asInstanceOf[String]
+      app.profileManager.updateProfile(profile)
+    })
     val tlsPreference = findPreference(Key.v_tls).asInstanceOf[DropDownPreference]
     tlsPreference.setDropDownWidth(R.dimen.default_dropdown_width)
     tlsPreference.setOnPreferenceChangeListener((_, value) => {
       profile.v_tls = value.asInstanceOf[String]
+      app.profileManager.updateProfile(profile)
+    })
+
+    val allowInsecurePreference = findPreference(Key.v_allowInsecure).asInstanceOf[DropDownPreference]
+    allowInsecurePreference.setDropDownWidth(R.dimen.default_dropdown_width)
+    allowInsecurePreference.setOnPreferenceChangeListener((_, value) => {
+      profile.t_allowInsecure = if (value.asInstanceOf[String] == "true") true else false
       app.profileManager.updateProfile(profile)
     })
 
